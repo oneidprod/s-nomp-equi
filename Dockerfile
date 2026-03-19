@@ -1,13 +1,23 @@
-FROM keymetrics/pm2:8-stretch
+FROM node:14-bullseye-slim
 
-RUN apt-get -yqq update && \
-    apt-get -yqq upgrade && \
-    apt-get -yqq install libboost-all-dev libsodium-dev
+RUN apt-get update && \
+    apt-get -yqq install --no-install-recommends \
+        libboost-dev \
+        libboost-system-dev \
+        libsodium-dev \
+        build-essential \
+        python3 \
+        nano \
+        git \
+        curl \
+        screen \
+        ca-certificates && \
+    npm install -g pm2 && \
+    rm -rf /var/lib/apt/lists/*
 
-RUN apt-get -yqq install vim git zsh tmux silversearcher-ag && \
-    curl -Lo- http://bit.ly/2pztvLf | bash
+RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
+    git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
-ENV SHELL /bin/zsh
 ENV NPM_CONFIG_LOGLEVEL warn
 
 CMD ["pm2-runtime", "start", "ecosystem.config.js", "--only", "site"]
