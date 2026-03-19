@@ -13,7 +13,7 @@ services:
       nofile:
         soft: 999999
         hard: 999999
-    command: ["sh", "-c", "npm install --ignore-scripts && sh /site/patch-equihash.sh && mkdir -p node_modules/verushash && echo 'module.exports={verify:function(){return false;}};' > node_modules/verushash/index.js && npm rebuild && pm2-runtime start ecosystem.config.js --only site"]
+    command: ["sh", "-c", "[ ! -d node_modules ] && npm install --ignore-scripts && sh /site/patch-equihash.sh && mkdir -p node_modules/verushash && echo 'module.exports={verify:function(){return false;}};' > node_modules/verushash/index.js && npm rebuild; pm2-runtime start ecosystem.config.js --only site"]
 
   redis:
     image: redis:latest

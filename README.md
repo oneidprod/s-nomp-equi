@@ -17,42 +17,119 @@ Please join our Discord to follow development. Any support questions can be answ
 
 https://discord.gg/4mVaTsH
 
-# Usage
+# Docker Usage (ARM64 / amd64)
+
+This repo includes a Docker setup tested on both **ARM64 (aarch64)** and **amd64** hosts.
 
 #### Requirements
-* Coin daemon(s) (find the coin's repo and build latest version from source)
-* [Node.js](http://nodejs.org/) v8.11 ([follow these installation instructions](https://github.com/nodejs/node))
-* [Redis](http://redis.io/) key-value store v2.6+ ([follow these instructions](http://redis.io/topics/quickstart))
+* Docker and Docker Compose
+* A running coin daemon (e.g. `zerod`) on the host machine
 
-##### Seriously
-These are legitimate requirements. If you use old versions of Node.js or Redis that may come with your system package manager then you will have problems. Follow the linked instructions to get the last stable versions.
+#### 0) Setting up the coin daemon
 
-[**Redis security warning**](http://redis.io/topics/security): be sure firewall access to redis - an easy way is to
-include `bind 127.0.0.1` in your `redis.conf` file. Also it's a good idea to learn about and understand software that
-you are using - a good place to start with redis is [data persistence](http://redis.io/topics/persistence).
-
-#### 0) Setting up coin daemon
-Follow the build/install instructions for your coin daemon. Your coin.conf file should end up looking something like this:
+Your coin's `.conf` file should include:
 ```
+rpcuser=yourrpcuser
+rpcpassword=yourrpcpassword
+rpcbind=127.0.0.1
+rpcport=8499
+rpcallowip=127.0.0.1
+server=1
 daemon=1
-rpcuser=zclassicrpc
-rpcpassword=securepassword
-rpcport=8232
 ```
-For redundancy, its recommended to have at least two daemon instances running in case one drops out-of-sync or offline,
-all instances will be polled for block/transaction updates and be used for submitting blocks. Creating a backup daemon
-involves spawning a daemon using the `-datadir=/backup` command-line argument which creates a new daemon instance with
-it's own config directory and coin.conf file. Learn about the daemon, how to use it and how it works if you want to be
-a good pool operator. For starters be sure to read:
-   * https://en.bitcoin.it/wiki/Running_bitcoind
-   * https://en.bitcoin.it/wiki/Data_directory
-   * https://en.bitcoin.it/wiki/Original_Bitcoin_client/API_Calls_list
-   * https://en.bitcoin.it/wiki/Difficulty
 
+The pool container runs with `network_mode: host` so it connects to the daemon on `127.0.0.1` directly — no need to change `rpcbind`.
 
-#### 1) Downloading & Installing
+#### 1) Configuration
 
-Clone the repository and run `npm update` for all the dependencies to be installed:
+Copy and edit the pool config:
+```bash
+cp pool_configs/examples/zer.json pool_configs/zer.json
+```
+
+Edit `pool_configs/zer.json` and set:
+* `address` — your transparent t-address for coinbase rewards
+* `tAddress` — your t-address for payments (can be the same)
+* `daemons[].host/port/user/password` — your daemon RPC details
+* `ports` — stratum port and difficulty settings
+
+Copy and edit the main config:
+```bash
+cp config_example.json config.json
+```
+
+Key settings in `config.json`:
+* `redis.host` — set to `127.0.0.1` (host networking)
+* `website.enabled` — set to `false` if you don't need the web UI
+
+**Note:** `config.json` and `pool_configs/*.json` are gitignored — they will never be committed as they contain RPC credentials.
+
+#### 2) Difficulty tuning
+
+In `pool_configs/zer.json`, adjust the `ports` section to match your miner's hashrate:
+```json
+"ports": {
+    "3092": {
+        "diff": 0.001,
+        "varDiff": {
+            "minDiff": 0.001,
+            "maxDiff": 0.5,
+            "targetTime": 15,
+            "retargetTime": 60,
+            "variancePercent": 30
+        }
+    }
+}
+```
+VarDiff will auto-tune within the min/max range. For low-hashrate miners (e.g. ~5 sol/s) use `minDiff: 0.001`.
+
+#### 3) Start the pool
+
+```bash
+docker compose up -d
+docker compose logs -f site
+```
+
+On first start, `npm install` will run inside the container and compile native addons (`equihashverify`, etc.). This takes a few minutes. Subsequent restarts skip this and start immediately.
+
+#### 4) Applying config changes
+
+For changes to `pool_configs/zer.json` or `config.json` — no rebuild needed:
+```bash
+docker compose restart site
+```
+
+#### 5) Forcing a fresh npm install
+
+Only needed after changing `Dockerfile` or `package.json`:
+```bash
+docker run --rm -v $(pwd):/site node:14-bullseye-slim rm -rf /site/node_modules
+docker compose restart site
+```
+
+#### 6) Monitor logs
+```bash
+docker compose logs -f site
+```
+
+#### Notes on ARM64 compatibility
+
+The original codebase targeted Node 8 / Debian Stretch (x86 only). The following changes were made to support modern ARM64 hosts:
+
+* Base image changed to `node:14-bullseye-slim` (native ARM64, non-archived repos)
+* `patch-equihash.sh` patches `equihashverify` C++ source at startup to compile against Node 14's v8 API
+* `verushash` (x86-only SSE4/AVX addon) is stubbed out — it is not needed for equihash/ZER mining
+* Git SSH dependencies rewritten to HTTPS so no SSH key is needed inside the container
+* `network_mode: host` used so the pool can reach the coin daemon on `127.0.0.1` without modifying `rpcbind`
+
+---
+
+#### Legacy (non-Docker) Usage
+
+##### Requirements
+* Coin daemon(s)
+* [Node.js](http://nodejs.org/) v8.11
+* [Redis](http://redis.io/) key-value store v2.6+
 
 ```bash
 sudo apt-get install build-essential libsodium-dev npm libboost-all-dev
@@ -60,61 +137,9 @@ sudo npm install n -g
 sudo n stable
 git clone https://github.com/s-nomp/s-nomp.git s-nomp
 cd s-nomp
-npm update
 npm install
-```
-
-##### Pool config
-Take a look at the example json file inside the `pool_configs` directory. Rename it to `zclassic.json` and change the
-example fields to fit your setup.
-
-```
-Please Note that: 1 Difficulty is actually 8192, 0.125 Difficulty is actually 1024.
-
-Whenever a miner submits a share, the pool counts the difficulty and keeps adding them as the shares. 
-
-ie: Miner 1 mines at 0.1 difficulty and finds 10 shares, the pool sees it as 1 share. Miner 2 mines at 0.5 difficulty and finds 5 shares, the pool sees it as 2.5 shares. 
-```
-
-
-##### [Optional, recommended] Setting up blocknotify
-1. In `config.json` set the port and password for `blockNotifyListener`
-2. In your daemon conf file set the `blocknotify` command to use:
-```
-node [path to cli.js] [coin name in config] [block hash symbol]
-```
-Example: inside `zclassic.conf` add the line
-```
-blocknotify=node /home/user/s-nomp/scripts/cli.js blocknotify zclassic %s
-```
-
-Alternatively, you can use a more efficient block notify script written in pure C. Build and usage instructions
-are commented in [scripts/blocknotify.c](scripts/blocknotify.c).
-
-
-#### 3) Start the portal
-
-```bash
 npm start
 ```
-
-###### Optional enhancements for your awesome new mining pool server setup:
-* Use something like [forever](https://github.com/nodejitsu/forever) to keep the node script running
-in case the master process crashes. 
-* Use something like [redis-commander](https://github.com/joeferner/redis-commander) to have a nice GUI
-for exploring your redis database.
-* Use something like [logrotator](http://www.thegeekstuff.com/2010/07/logrotate-examples/) to rotate log 
-output from s-nomp.
-* Use [New Relic](http://newrelic.com/) to monitor your s-nomp instance and server performance.
-
-
-#### Upgrading s-nomp
-When updating s-nomp to the latest code its important to not only `git pull` the latest from this repo, but to also update
-the `node-stratum-pool` and `node-multi-hashing` modules, and any config files that may have been changed.
-* Inside your s-nomp directory (where the init.js script is) do `git pull` to get the latest s-nomp code.
-* Remove the dependenices by deleting the `node_modules` directory with `rm -r node_modules`.
-* Run `npm update` to force updating/reinstalling of the dependencies.
-* Compare your `config.json` and `pool_configs/coin.json` configurations to the latest example ones in this repo or the ones in the setup instructions where each config field is explained. <b>You may need to modify or add any new changes.</b>
 
 
 Credits
